@@ -201,6 +201,9 @@ int KSHARK_PLOT_PLUGIN_DEINITIALIZER(struct kshark_data_stream *stream)
 	struct plugin_sched_context *plugin_ctx;
 	int sd = stream->stream_id;
 
+	if (sd == KS_PLUGIN_CONTEXT_FREE)
+		goto close;
+
 	plugin_ctx = __get_context(sd);
 	if (!plugin_ctx)
 		return 0;
@@ -215,6 +218,7 @@ int KSHARK_PLOT_PLUGIN_DEINITIALIZER(struct kshark_data_stream *stream)
 
 	kshark_unregister_draw_handler(stream, plugin_draw);
 
+ close:
 	__close(sd);
 
 	return 1;
