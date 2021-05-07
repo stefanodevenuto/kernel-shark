@@ -12,6 +12,11 @@ message(STATUS "multibufferload")
 add_executable(mbload          multibufferload.c)
 target_link_libraries(mbload   kshark)
 
+message(STATUS "checker")
+add_executable(checker          checker.c)
+target_link_libraries(checker   kshark)
+target_link_libraries(checker   m)
+
 message(STATUS "datahisto")
 add_executable(dhisto          datahisto.c)
 target_link_libraries(dhisto   kshark)
