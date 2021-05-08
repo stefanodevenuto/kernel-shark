@@ -132,7 +132,7 @@ void compute_variance_and_sd(struct samples* samples)
 
 void print_stats(struct samples* samples)
 {
-    printf("N_Samples: %d,\tMean: %f,\tVariance: %f,\tSD: %f\n",
+    printf("N_Samples: %d,\tMean: %f ns,\tVariance: %f ns^2,\tSD: %f ns\n",
         samples->count,
         samples->mean,
         samples->variance,
@@ -307,9 +307,13 @@ int main(int argc, char **argv)
 
                             /* If the reason is actually MSR_WRITE */
                             if (info1 != 1) {
+
+                                /* Reset values in case of unexpected VMExit reason */
+                                custom_stream->cpus[current->cpu]->hrtimer_event = -1;
+                                custom_stream->cpus[current->cpu]->cpu_idle_event = -1;
                                 continue;
-                            } else printf("AMD: ");
-                        } else printf("Intel: ");
+                            }
+                        }
 
                         printf("MSR found: %" PRId64 "\n", current->ts - custom_stream->cpus[current->cpu]->hrtimer_event);
 
@@ -348,7 +352,7 @@ int main(int argc, char **argv)
                 if (custom_stream->cpus[current->cpu]->state != -1) {
 
                     if (v_i == host_stream->original_stream->n_cpus) {
-                        //printf("%d G out:\t", i);
+                        printf("%d G out:\t", i);
                     } else {
 
                         /* If the current event is relevant for the MSR analysis */
@@ -375,12 +379,12 @@ int main(int argc, char **argv)
              */
             } else {
                 if (custom_stream->cpus[current->cpu]->state != -1) {
-                    //printf("%d H in:\t", i);
+                    printf("%d H in:\t", i);
                 }
             }
         }
 
-        //print_entry(entries[i]);
+        print_entry(entries[i]);
     }
 
     compute_variance_and_sd(hrtimer_events);
