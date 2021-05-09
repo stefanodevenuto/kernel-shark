@@ -41,9 +41,15 @@ struct samples
     float sd;
 };
 
+struct state
+{
+    int stream_id;
+    int cpu;
+};
+
 struct cpu
 {
-    int state;
+    struct state* state;
 
     uint64_t hrtimer_event;
     uint64_t cpu_idle_event;
@@ -182,19 +188,19 @@ void print_stats(struct samples* hrtimer_events, struct samples* cpu_idle_events
     compute_variance_and_sd(hrtimer_events);
     compute_variance_and_sd(cpu_idle_events);
 
-    printf("########## GLOBAL STATS ##########\n\n");
+    printf("\n################### GLOBAL STATS\n\n");
 
-    printf("Host events inside kvm_entry/kvm_exit block: %d\n\n", n_host_events_inside);
+    printf("Host events inside kvm_entry/kvm_exit block: %d\n", n_host_events_inside);
     printf("Guest events outside kvm_entry/kvm_exit block: %d\n\n", n_guest_events_inside);
 
-    printf("\tMSR events:\t\t");
+    printf("TIMER events:\t");
     print_sample_stats(hrtimer_events);
 
-    printf("\tCPU_IDLE events:\t");
+    printf("HLT events:\t");
     print_sample_stats(cpu_idle_events);
 
     if (n_mapping > 1) {
-        printf("\n\n########## PER GUEST STATS ##########\n\n");
+        printf("\n\n################### PER GUEST STATS\n");
         for (int i = 0; i < n_streams; i++) {
             stream_id = custom_streams[i]->original_stream->stream_id;
 
@@ -204,17 +210,18 @@ void print_stats(struct samples* hrtimer_events, struct samples* cpu_idle_events
                 compute_variance_and_sd(custom_streams[i]->local_hrtimer_samples);
                 compute_variance_and_sd(custom_streams[i]->local_cpu_idle_samples);
 
-                printf("\t\t%s\n\n", stream_name);
-                printf("Events outside kvm_entry/kvm_exit block: %d\n\n", custom_streams[i]->n_guest_event_outside);
+                printf("\n[+] %s\n\n", stream_name);
+                printf("\tEvents outside kvm_entry/kvm_exit block: %d\n\n", custom_streams[i]->n_guest_event_outside);
 
-                printf("\tMSR events:\t\t");
+                printf("\tTIMER events:\t");
                 print_sample_stats(custom_streams[i]->local_hrtimer_samples);
 
-                printf("\tCPU_IDLE events:\t");
+                printf("\tHTL events:\t");
                 print_sample_stats(custom_streams[i]->local_cpu_idle_samples);
             }
         }
     }
+    printf("\n");
 }
 
 void free_data(struct kshark_context *kshark_ctx,
@@ -228,8 +235,10 @@ void free_data(struct kshark_context *kshark_ctx,
     for (int i = 0; i < kshark_ctx->n_streams; i++) {
         custom_stream = custom_streams[i];
 
-        for (int j = 0; j < custom_stream->original_stream->n_cpus; j++)
+        for (int j = 0; j < custom_stream->original_stream->n_cpus; j++) {
+            free(custom_stream->cpus[j]->state);
             free(custom_stream->cpus[j]);
+        }
 
         free(custom_stream->cpus);
         free(custom_stream);
@@ -302,6 +311,9 @@ int main(int argc, char **argv)
         for (int i = 0; i < custom_stream->original_stream->n_cpus; i++) {
             custom_stream->cpus[i] = malloc(sizeof(*custom_stream->cpus[i]));
             memset(custom_stream->cpus[i], -1, sizeof(*custom_stream->cpus[i]));
+
+            custom_stream->cpus[i]->state = malloc(sizeof(*custom_stream->cpus[i]->state));
+            memset(custom_stream->cpus[i]->state, -1, sizeof(*custom_stream->cpus[i]->state));
         }
 
         custom_streams[i-1] = custom_stream;
@@ -351,14 +363,7 @@ int main(int argc, char **argv)
              * another VM, but the trace file of that is not passed or the tracing was off on that VM.
              */
             if (!guest_id_from_host_entry_exit(host_guest_mapping, n_guest, &guest_id, current)) {
-                printf("Error on recovering guest stream ID\n");
                 print_entry(entries[i]);
-
-                if (!strcmp(event_name, KVM_ENTRY))
-                    custom_stream->cpus[current->cpu]->state = vcpu;
-                else
-                    custom_stream->cpus[current->cpu]->state = -1;
-
                 continue;
             }
 
@@ -368,12 +373,14 @@ int main(int argc, char **argv)
              * kvm_entry or a kvm_exit (like it should be).
              */
             guest_stream = custom_streams[guest_id];
-            guest_stream->cpus[vcpu]->state = 1;
+            guest_stream->cpus[vcpu]->state->cpu = 1;
 
             if (!strcmp(event_name, KVM_ENTRY)) {
-                custom_stream->cpus[current->cpu]->state = vcpu;
+                custom_stream->cpus[current->cpu]->state->stream_id = guest_id;
+                custom_stream->cpus[current->cpu]->state->cpu = vcpu;
             } else {
-                custom_stream->cpus[current->cpu]->state = -1;
+                custom_stream->cpus[current->cpu]->state->stream_id = -1;
+                custom_stream->cpus[current->cpu]->state->cpu = -1;
 
                 if (kshark_read_event_field_int(current, "exit_reason", &reason)) {
                     printf("Error on recovering the reason field\n");
@@ -399,7 +406,7 @@ int main(int argc, char **argv)
                             }
                         }
 
-                        printf("MSR found: %" PRId64 "\n", current->ts - custom_stream->cpus[current->cpu]->hrtimer_event);
+                        //printf("MSR found: %" PRId64 "\n", current->ts - custom_stream->cpus[current->cpu]->hrtimer_event);
 
                         add_sample(hrtimer_events, current->ts - custom_stream->cpus[current->cpu]->hrtimer_event);
 
@@ -411,7 +418,7 @@ int main(int argc, char **argv)
 
                 if (custom_stream->cpus[current->cpu]->cpu_idle_event != -1) {
                     if (reason == SVM_EXIT_HLT || reason == VMX_EXIT_REASON_HLT) {
-                        printf("CPU_IDLE found: %" PRId64 "\n", current->ts - custom_stream->cpus[current->cpu]->cpu_idle_event);
+                        //printf("CPU_IDLE found: %" PRId64 "\n", current->ts - custom_stream->cpus[current->cpu]->cpu_idle_event);
 
                         add_sample(cpu_idle_events, current->ts - custom_stream->cpus[current->cpu]->cpu_idle_event);
 
@@ -435,15 +442,16 @@ int main(int argc, char **argv)
                 host_stream = custom_streams[host];
 
                 for (v_i = 0; v_i < host_stream->original_stream->n_cpus; v_i++) {
-                    if (current->cpu == host_stream->cpus[v_i]->state)
-                    break;
+                    if (host_stream->cpus[v_i]->state->stream_id == stream->stream_id
+                        && host_stream->cpus[v_i]->state->cpu == current->cpu) {
+                        break;
+                    }
                 }
 
                 /* If the event is checkable */
-                if (custom_stream->cpus[current->cpu]->state != -1) {
+                if (custom_stream->cpus[current->cpu]->state->cpu != -1) {
 
                     if (v_i == host_stream->original_stream->n_cpus) {
-                        printf("%d G out, vCPU: %d:\t", i, v_i);
                         custom_stream->n_guest_event_outside = custom_stream->n_guest_event_outside + 1;
                         n_guest_events_outside++;
                     } else {
@@ -471,14 +479,11 @@ int main(int argc, char **argv)
              * and check if it's NOT INSIDE a kvm_entry/kvm_exit block.
              */
             } else {
-                if (custom_stream->cpus[current->cpu]->state != -1) {
-                    printf("%d H in:\t", i);
+                if (custom_stream->cpus[current->cpu]->state->cpu != -1) {
                     n_host_events_inside++;
                 }
             }
         }
-
-        print_entry(entries[i]);
     }
 
     print_stats(hrtimer_events, cpu_idle_events, custom_streams, kshark_ctx->n_streams, host_guest_mapping, n_guest, n_host_events_inside, n_guest_events_outside);
