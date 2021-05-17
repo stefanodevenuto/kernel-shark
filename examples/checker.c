@@ -63,6 +63,7 @@ struct custom_stream
     struct samples* local_hrtimer_samples;
     struct samples* local_cpu_idle_samples;
 
+    int n_events;
     int n_guest_event_outside;
 };
 
@@ -140,8 +141,10 @@ void compute_variance_and_sd(struct samples* samples)
         aux += pow(samples->samples[i] - samples->mean, 2);
     }
 
-    samples->variance = aux / (float) samples->count;
-    samples->sd = sqrt(samples->variance);
+    if (samples->count) {
+        samples->variance = aux / (float) samples->count;
+        samples->sd = sqrt(samples->variance);
+    }
 }
 
 void print_sample_stats(struct samples* samples)
@@ -179,7 +182,8 @@ void print_entry(struct kshark_entry* entry)
 
 void print_stats(struct samples* hrtimer_events, struct samples* cpu_idle_events,
                  struct custom_stream** custom_streams, int n_streams,
-                 struct kshark_host_guest_map* mapping, int n_mapping, int n_host_events_inside, int n_guest_events_inside)
+                 struct kshark_host_guest_map* mapping, int n_mapping, int n_events,
+                 int n_host_events_inside, int n_guest_events_inside)
 {
     char* stream_name;
     int stream_id;
@@ -190,6 +194,7 @@ void print_stats(struct samples* hrtimer_events, struct samples* cpu_idle_events
 
     printf("\n################### GLOBAL STATS\n\n");
 
+    printf("Number of events: %d\n", n_events);
     printf("Host events inside kvm_entry/kvm_exit block: %d\n", n_host_events_inside);
     printf("Guest events outside kvm_entry/kvm_exit block: %d\n\n", n_guest_events_inside);
 
@@ -211,6 +216,7 @@ void print_stats(struct samples* hrtimer_events, struct samples* cpu_idle_events
                 compute_variance_and_sd(custom_streams[i]->local_cpu_idle_samples);
 
                 printf("\n[+] %s\n\n", stream_name);
+                printf("\tNumber of events: %d\n", custom_streams[i]->n_events);
                 printf("\tEvents outside kvm_entry/kvm_exit block: %d\n\n", custom_streams[i]->n_guest_event_outside);
 
                 printf("\tTIMER events:\t");
@@ -277,6 +283,7 @@ int main(int argc, char **argv)
     int host;
     int v_i;
     int sd;
+    int i;
 
     struct samples* hrtimer_events = NULL;
     struct samples* cpu_idle_events = NULL;
@@ -344,7 +351,7 @@ int main(int argc, char **argv)
 
     n_host_events_inside = 0;
     n_guest_events_outside = 0;
-    for (int i = 0; i < n_entries; ++i) {
+    for (i = 0; i < n_entries; ++i) {
         current = entries[i];
 
         stream = kshark_get_stream_from_entry(current);
@@ -362,10 +369,8 @@ int main(int argc, char **argv)
              * If the recovering process fail it's not an error, since while recording there could be
              * another VM, but the trace file of that is not passed or the tracing was off on that VM.
              */
-            if (!guest_id_from_host_entry_exit(host_guest_mapping, n_guest, &guest_id, current)) {
-                print_entry(entries[i]);
+            if (!guest_id_from_host_entry_exit(host_guest_mapping, n_guest, &guest_id, current))
                 continue;
-            }
 
             /**
              * Workaround implemented in order to not mark as invalid initial guests events.
@@ -448,6 +453,8 @@ int main(int argc, char **argv)
                     }
                 }
 
+                custom_stream->n_events = custom_stream->n_events + 1;
+
                 /* If the event is checkable */
                 if (custom_stream->cpus[current->cpu]->state->cpu != -1) {
 
@@ -484,9 +491,11 @@ int main(int argc, char **argv)
                 }
             }
         }
+
+        print_entry(entries[i]);
     }
 
-    print_stats(hrtimer_events, cpu_idle_events, custom_streams, kshark_ctx->n_streams, host_guest_mapping, n_guest, n_host_events_inside, n_guest_events_outside);
+    print_stats(hrtimer_events, cpu_idle_events, custom_streams, kshark_ctx->n_streams, host_guest_mapping, n_guest, i, n_host_events_inside, n_guest_events_outside);
 
     /* Free local samples arrays */
     if (multiple_guests) {
