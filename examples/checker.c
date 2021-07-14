@@ -247,15 +247,39 @@ int not_in(char* current_event, char** filtered_events, int n_filtered_events)
 	return 1;
 }
 
-void free_data(struct kshark_context *kshark_ctx,
-           struct custom_stream** custom_streams,
-           struct kshark_entry** entries, int n_entries,
-           struct kshark_host_guest_map* host_guest_mapping,
-           int n_guest, char** filtered_events)
+void print_usage(char* name) {
+    fprintf(stderr, "Usage: %s [-n event_name] [files...]\n", name);
+}
+
+int filter_options(int argc, char** argv, char** filtered_events) {
+    int n_filtered_events;
+    int c;
+
+    n_filtered_events = 0;
+    while ((c = getopt (argc, argv, "n:")) != -1) {
+        switch (c) {
+            case 'n':
+                filtered_events[n_filtered_events] = optarg;
+                break;
+            default:
+                return -1;
+        }
+        n_filtered_events++;
+    }
+
+    if (argc - optind < 2) {
+        fprintf(stderr, "Error: At least 2 trace files\n");
+        return -1;
+    }
+
+    return n_filtered_events;
+}
+
+void free_custom_streams(struct custom_stream** custom_streams, int n_streams)
 {
     struct custom_stream* custom_stream;
 
-    for (int i = 0; i < kshark_ctx->n_streams; i++) {
+    for (int i = 0; i < n_streams; i++) {
         custom_stream = custom_streams[i];
 
         for (int j = 0; j < custom_stream->original_stream->n_cpus; j++) {
@@ -267,6 +291,55 @@ void free_data(struct kshark_context *kshark_ctx,
         free(custom_stream);
     }
     free(custom_streams);
+}
+
+struct custom_stream** initialize_streams(int argc, char** argv, struct kshark_context* kshark_ctx) {
+    struct custom_stream** custom_streams;
+    struct custom_stream* custom_stream;
+    int sd;
+
+    custom_streams = malloc(sizeof(*custom_streams) * (argc - optind));
+
+    for (int i = 0; i + optind < argc; i++) {
+        sd = kshark_open(kshark_ctx, argv[i+optind]);
+        if (sd < 0) {
+            fprintf(stderr, "Error: File not found\n");
+
+            kshark_free(kshark_ctx);
+            return NULL;
+        }
+
+        kshark_tep_init_all_buffers(kshark_ctx, sd);
+
+        /**
+         * Creating custom streams in order to keep track if a
+         * pCPU is executing code of a vCPU and, if so, which vCPU.
+         */
+        custom_stream = calloc(1, sizeof(*custom_stream));
+        custom_stream->original_stream = kshark_get_data_stream(kshark_ctx, sd);
+        custom_stream->cpus = malloc(custom_stream->original_stream->n_cpus * sizeof(*custom_stream->cpus));
+
+        for (int i = 0; i < custom_stream->original_stream->n_cpus; i++) {
+            custom_stream->cpus[i] = malloc(sizeof(*custom_stream->cpus[i]));
+            memset(custom_stream->cpus[i], -1, sizeof(*custom_stream->cpus[i]));
+
+            custom_stream->cpus[i]->state = malloc(sizeof(*custom_stream->cpus[i]->state));
+            memset(custom_stream->cpus[i]->state, -1, sizeof(*custom_stream->cpus[i]->state));
+        }
+
+        custom_streams[i] = custom_stream;
+    }
+
+    return custom_streams;
+}
+
+void free_data(struct kshark_context *kshark_ctx,
+           struct custom_stream** custom_streams,
+           struct kshark_entry** entries, int n_entries,
+           struct kshark_host_guest_map* host_guest_mapping,
+           int n_guest, char** filtered_events)
+{
+    free_custom_streams(custom_streams, kshark_ctx->n_streams);
 
     for (int i = 0; i < n_entries; i++)
         free(entries[i]);
@@ -306,89 +379,55 @@ int main(int argc, char **argv)
     int n_guest;
     int host;
     int v_i;
-    int sd;
     int i;
-    int c;
 
     filtered_events = malloc(sizeof(char*) * argc);
-    n_filtered_events = 0;
+    multiple_guests = 0;
 
-    /* Parse options */
-    while ((c = getopt (argc, argv, "n:")) != -1) {
-        switch (c) {
-            case 'n':
-                filtered_events[n_filtered_events] = optarg;
-                break;
-            default:
-                fprintf(stderr, "Usage: %s [-n event_name] [files...]\n", argv[0]);
-                exit(0);
-        }
-        n_filtered_events++;
-    }
+    /* Recover the not-to-be-checked events (-n) */
+    n_filtered_events = filter_options(argc, argv, filtered_events);
+    if (n_filtered_events == -1) {
+        print_usage(argv[0]);
 
-    if (argc - optind < 2) {
-		fprintf(stderr, "Error: At least 2 trace files\n");
-		fprintf(stderr, "Usage: %s [-n event_name] [files...]\n", argv[0]);
-		return 1;
+        free(filtered_events);
+        return -1;
     }
 
     cpu_idle_events = NULL;
     hrtimer_events = NULL;
 
-    initialize_sample_array(&hrtimer_events, INITIAL_CAPACITY);
-    initialize_sample_array(&cpu_idle_events, INITIAL_CAPACITY);
-
     kshark_ctx = NULL;
     if (!kshark_instance(&kshark_ctx))
         return 1;
 
-    custom_streams = malloc(sizeof(*custom_streams) * (argc-1));
-    multiple_guests = 0;
+    /* Initialize streams informations */
+    custom_streams = initialize_streams(argc, argv, kshark_ctx);
+    if (custom_streams == NULL) {
+        print_usage(argv[0]);
 
-    for (int i = 0; i + optind < argc; i++) {
-        sd = kshark_open(kshark_ctx, argv[i+optind]);
-        if (sd < 0) {
-            fprintf(stderr, "Error: File not found\n");
-            fprintf(stderr, "Usage: %s [-n event_name] [files...]\n", argv[0]);
-
-            free_sample_array(cpu_idle_events);
-            free_sample_array(hrtimer_events);
-            kshark_free(kshark_ctx);
-            free(custom_streams);
-            return 1;
-        }
-
-        kshark_tep_init_all_buffers(kshark_ctx, sd);
-
-        /**
-         * Creating custom streams in order to keep track if a
-         * pCPU is executing code of a vCPU and, if so, which vCPU.
-         */
-        custom_stream = calloc(1, sizeof(*custom_stream));
-        custom_stream->original_stream = kshark_get_data_stream(kshark_ctx, sd);
-        custom_stream->cpus = malloc(custom_stream->original_stream->n_cpus * sizeof(*custom_stream->cpus));
-
-        for (int i = 0; i < custom_stream->original_stream->n_cpus; i++) {
-            custom_stream->cpus[i] = malloc(sizeof(*custom_stream->cpus[i]));
-            memset(custom_stream->cpus[i], -1, sizeof(*custom_stream->cpus[i]));
-
-            custom_stream->cpus[i]->state = malloc(sizeof(*custom_stream->cpus[i]->state));
-            memset(custom_stream->cpus[i]->state, -1, sizeof(*custom_stream->cpus[i]->state));
-        }
-
-        custom_streams[i] = custom_stream;
+        free(filtered_events);
+        free_custom_streams(custom_streams, kshark_ctx->n_streams);
+        return -1;
     }
 
+    /* Recover the host-guest mapping */
     host_guest_mapping = NULL;
     n_guest = kshark_tracecmd_get_hostguest_mapping(&host_guest_mapping);
     if (n_guest < 0) {
         printf("Failed mapping: %d\n", n_guest);
+
+        free(filtered_events);
+        free_custom_streams(custom_streams, kshark_ctx->n_streams);
         return 1;
     }
+
+    initialize_sample_array(&hrtimer_events, INITIAL_CAPACITY);
+    initialize_sample_array(&cpu_idle_events, INITIAL_CAPACITY);
 
     if (n_guest > 1)
         multiple_guests = 1;
 
+    /* In case of multiple guests, recover their streams and initialize their sample arrays*/
     if (multiple_guests) {
         for (int i = 0; i < argc - optind; i++) {
             custom_stream = custom_streams[i];
@@ -399,6 +438,7 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Recover all entries from all trace files */
     entries = NULL;
     n_entries = kshark_load_all_entries(kshark_ctx, &entries);
 
