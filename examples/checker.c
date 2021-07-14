@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
 
 #include "libkshark.h"
 #include "libkshark-tepdata.h"
@@ -230,11 +231,20 @@ void print_stats(struct samples* hrtimer_events, struct samples* cpu_idle_events
     printf("\n");
 }
 
+int not_in(char* current_event, char** filtered_events, int n_filtered_events)
+{
+	for (int i = 0; i < n_filtered_events; i++)
+		if (!strcmp(current_event, filtered_events[i]))
+			return 0;
+
+	return 1;
+}
+
 void free_data(struct kshark_context *kshark_ctx,
            struct custom_stream** custom_streams,
            struct kshark_entry** entries, int n_entries,
            struct kshark_host_guest_map* host_guest_mapping,
-           int n_guest)
+           int n_guest, char** filtered_events)
 {
     struct custom_stream* custom_stream;
 
@@ -255,6 +265,8 @@ void free_data(struct kshark_context *kshark_ctx,
         free(entries[i]);
     free(entries);
 
+    free(filtered_events);
+
     kshark_tracecmd_free_hostguest_map(host_guest_mapping, n_guest);
 }
 
@@ -267,10 +279,15 @@ int main(int argc, char **argv)
     struct custom_stream* host_stream;
     struct kshark_data_stream* stream;
     struct kshark_context* kshark_ctx;
+    struct samples* cpu_idle_events;
+    struct samples* hrtimer_events;
     struct kshark_entry** entries;
     struct kshark_entry* current;
     int n_guest_events_outside;
     int n_host_events_inside;
+    char** filtered_events;
+    int n_filtered_events;
+    char* half_event_name;
     int multiple_guests;
     ssize_t n_entries;
     char* event_name;
@@ -284,9 +301,32 @@ int main(int argc, char **argv)
     int v_i;
     int sd;
     int i;
+    int c;
 
-    struct samples* hrtimer_events = NULL;
-    struct samples* cpu_idle_events = NULL;
+    filtered_events = malloc(sizeof(char*) * argc);
+    n_filtered_events = 0;
+
+    /* Parse options */
+    while ((c = getopt (argc, argv, "n:")) != -1) {
+        switch (c) {
+            case 'n':
+                filtered_events[n_filtered_events] = optarg;
+                break;
+            default:
+                fprintf(stderr, "Usage: %s [-n event_name] [files...]\n", argv[0]);
+                exit(0);
+        }
+        n_filtered_events++;
+    }
+
+    if (argc - optind < 2) {
+		fprintf(stderr, "Error: At least 2 trace files\n");
+		fprintf(stderr, "Usage: %s [-n event_name] [files...]\n", argv[0]);
+		return 1;
+    }
+
+    cpu_idle_events = NULL;
+    hrtimer_events = NULL;
 
     initialize_sample_array(&hrtimer_events, INITIAL_CAPACITY);
     initialize_sample_array(&cpu_idle_events, INITIAL_CAPACITY);
@@ -298,8 +338,8 @@ int main(int argc, char **argv)
     custom_streams = malloc(sizeof(*custom_streams) * (argc-1));
     multiple_guests = 0;
 
-    for (int i = 1; i < argc; i++) {
-        sd = kshark_open(kshark_ctx, argv[i]);
+    for (int i = 0; i + optind < argc; i++) {
+        sd = kshark_open(kshark_ctx, argv[i+optind]);
         if (sd < 0) {
             kshark_free(kshark_ctx);
             return 1;
@@ -323,7 +363,7 @@ int main(int argc, char **argv)
             memset(custom_stream->cpus[i]->state, -1, sizeof(*custom_stream->cpus[i]->state));
         }
 
-        custom_streams[i-1] = custom_stream;
+        custom_streams[i] = custom_stream;
     }
 
     host_guest_mapping = NULL;
@@ -337,8 +377,8 @@ int main(int argc, char **argv)
         multiple_guests = 1;
 
     if (multiple_guests) {
-        for (int i = 1; i < argc; i++) {
-            custom_stream = custom_streams[i-1];
+        for (int i = 0; i < argc - optind; i++) {
+            custom_stream = custom_streams[i];
             if (is_guest(custom_stream->original_stream->stream_id, host_guest_mapping, n_guest, &host)) {
                 initialize_sample_array(&custom_stream->local_hrtimer_samples, INITIAL_CAPACITY);
                 initialize_sample_array(&custom_stream->local_cpu_idle_samples, INITIAL_CAPACITY);
@@ -486,16 +526,23 @@ int main(int argc, char **argv)
              * and check if it's NOT INSIDE a kvm_entry/kvm_exit block.
              */
             } else {
-                if (custom_stream->cpus[current->cpu]->state->cpu != -1) {
+            	half_event_name = strdup(event_name);
+            	strtok(half_event_name, "/");
+                if (custom_stream->cpus[current->cpu]->state->cpu != -1 &&
+                	(not_in(strtok(NULL, "/"), filtered_events, n_filtered_events) &&
+                		not_in(event_name, filtered_events, n_filtered_events))) {
+
                     n_host_events_inside++;
                 }
+                free(half_event_name);
             }
         }
 
-        print_entry(entries[i]);
+        //print_entry(entries[i]);
     }
 
-    print_stats(hrtimer_events, cpu_idle_events, custom_streams, kshark_ctx->n_streams, host_guest_mapping, n_guest, i, n_host_events_inside, n_guest_events_outside);
+    print_stats(hrtimer_events, cpu_idle_events, custom_streams, kshark_ctx->n_streams, host_guest_mapping,
+                n_guest, i, n_host_events_inside, n_guest_events_outside);
 
     /* Free local samples arrays */
     if (multiple_guests) {
@@ -511,7 +558,7 @@ int main(int argc, char **argv)
     free_sample_array(hrtimer_events);
     free_sample_array(cpu_idle_events);
 
-    free_data(kshark_ctx, custom_streams, entries, n_entries, host_guest_mapping, n_guest);
+    free_data(kshark_ctx, custom_streams, entries, n_entries, host_guest_mapping, n_guest, filtered_events);
     kshark_free(kshark_ctx);
 }
 
