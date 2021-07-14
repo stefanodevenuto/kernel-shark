@@ -29,6 +29,9 @@
 
 #define INITIAL_CAPACITY 20
 
+/* Output format and color */
+#define FORMAT_PRINT(n) if (n) printf("\033[0;31m[-]\033[0m "); else printf("\033[0;32m[+]\033[0m ");
+
 struct samples
 {
     uint64_t* samples;
@@ -196,7 +199,11 @@ void print_stats(struct samples* hrtimer_events, struct samples* cpu_idle_events
     printf("\n################### GLOBAL STATS\n\n");
 
     printf("Number of events: %d\n", n_events);
+
+    FORMAT_PRINT(n_host_events_inside)
     printf("Host events inside kvm_entry/kvm_exit block: %d\n", n_host_events_inside);
+
+    FORMAT_PRINT(n_guest_events_inside)
     printf("Guest events outside kvm_entry/kvm_exit block: %d\n\n", n_guest_events_inside);
 
     printf("TIMER events:\t");
@@ -341,7 +348,13 @@ int main(int argc, char **argv)
     for (int i = 0; i + optind < argc; i++) {
         sd = kshark_open(kshark_ctx, argv[i+optind]);
         if (sd < 0) {
+            fprintf(stderr, "Error: File not found\n");
+            fprintf(stderr, "Usage: %s [-n event_name] [files...]\n", argv[0]);
+
+            free_sample_array(cpu_idle_events);
+            free_sample_array(hrtimer_events);
             kshark_free(kshark_ctx);
+            free(custom_streams);
             return 1;
         }
 
