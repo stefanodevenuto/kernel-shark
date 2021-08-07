@@ -32,6 +32,15 @@
 /* Output format and color */
 #define FORMAT_PRINT(n) if (n) printf("\033[0;31m[-]\033[0m "); else printf("\033[0;32m[+]\033[0m ");
 
+struct options
+{
+    char** filtered_events;
+    int n_filtered_events;
+
+    FILE* sp_timer;
+    FILE* sp_idle;
+};
+
 struct samples
 {
     uint64_t* samples;
@@ -247,24 +256,51 @@ int not_in(char* current_event, char** filtered_events, int n_filtered_events)
 	return 1;
 }
 
-void print_usage(char* name) {
-    fprintf(stderr, "Usage: %s [-n event_name] [files...]\n", name);
+
+void dump_samples(struct samples* samples, FILE* sp, char* type) {
+    fprintf(sp, "# Generated samples\n");
+
+    if (samples->count) {
+        fprintf(sp, "\n# %s samples: %d samples\n", type, samples->count);
+        for (int i = 0; i < samples->count; i++)
+            fprintf(sp, "%" PRId64 "\n", samples->samples[i]);
+    }
 }
 
-int filter_options(int argc, char** argv, char** filtered_events) {
-    int n_filtered_events;
-    int c;
+void dump_all_samples(struct samples* hrtimer_events, struct samples* cpu_idle_events, FILE* sp_timer, FILE* sp_idle)
+{
+    dump_samples(hrtimer_events, sp_timer, "Timer");
+    dump_samples(cpu_idle_events, sp_idle, "Idle");
+}
 
-    n_filtered_events = 0;
-    while ((c = getopt (argc, argv, "n:")) != -1) {
+void print_usage(char* name) {
+    fprintf(stderr, "Usage: %s <host-file> <guest-file>... [-n event_name]... [-s samples-file]\n", name);
+}
+
+int parse_options(int argc, char** argv, struct options* options) {
+    int c;
+    char* filename = malloc(sizeof(*filename) * 20);
+    options->filtered_events = malloc(sizeof(char*) * argc);
+    options->n_filtered_events = 0;
+
+    while ((c = getopt (argc, argv, "n:s:")) != -1) {
         switch (c) {
             case 'n':
-                filtered_events[n_filtered_events] = optarg;
+                options->filtered_events[options->n_filtered_events] = optarg;
+                options->n_filtered_events = options->n_filtered_events + 1;
+                break;
+            case 's':
+                if (sprintf(filename, "%s-timer.txt", optarg) < 0)
+                    return -1;
+                options->sp_timer = fopen(filename, "w");
+
+                if (sprintf(filename, "%s-idle.txt", optarg) < 0)
+                    return -1;
+                options->sp_idle = fopen(filename, "w");
                 break;
             default:
                 return -1;
         }
-        n_filtered_events++;
     }
 
     if (argc - optind < 2) {
@@ -272,7 +308,7 @@ int filter_options(int argc, char** argv, char** filtered_events) {
         return -1;
     }
 
-    return n_filtered_events;
+    return 1;
 }
 
 void free_custom_streams(struct custom_stream** custom_streams, int n_streams)
@@ -333,11 +369,22 @@ struct custom_stream** initialize_streams(int argc, char** argv, struct kshark_c
     return custom_streams;
 }
 
+void free_options(struct options* options) {
+    if (options->filtered_events)
+        free(options->filtered_events);
+
+    if (options->sp_timer)
+        fclose(options->sp_timer);
+
+    if (options->sp_idle)
+        fclose(options->sp_idle);
+}
+
 void free_data(struct kshark_context *kshark_ctx,
            struct custom_stream** custom_streams,
            struct kshark_entry** entries, int n_entries,
            struct kshark_host_guest_map* host_guest_mapping,
-           int n_guest, char** filtered_events)
+           int n_guest, struct options* options)
 {
     free_custom_streams(custom_streams, kshark_ctx->n_streams);
 
@@ -345,7 +392,7 @@ void free_data(struct kshark_context *kshark_ctx,
         free(entries[i]);
     free(entries);
 
-    free(filtered_events);
+    free_options(options);
 
     kshark_tracecmd_free_hostguest_map(host_guest_mapping, n_guest);
 }
@@ -360,13 +407,12 @@ int main(int argc, char **argv)
     struct kshark_data_stream* stream;
     struct kshark_context* kshark_ctx;
     struct samples* cpu_idle_events;
+    struct options* options;
     struct samples* hrtimer_events;
     struct kshark_entry** entries;
     struct kshark_entry* current;
     int n_guest_events_outside;
     int n_host_events_inside;
-    char** filtered_events;
-    int n_filtered_events;
     char* half_event_name;
     int multiple_guests;
     ssize_t n_entries;
@@ -381,15 +427,15 @@ int main(int argc, char **argv)
     int v_i;
     int i;
 
-    filtered_events = malloc(sizeof(char*) * argc);
     multiple_guests = 0;
 
-    /* Recover the not-to-be-checked events (-n) */
-    n_filtered_events = filter_options(argc, argv, filtered_events);
-    if (n_filtered_events == -1) {
+    options = calloc(1, sizeof(*options));
+
+    /* Parse the options */
+    if (parse_options(argc, argv, options) == -1) {
         print_usage(argv[0]);
 
-        free(filtered_events);
+        free_options(options);
         return -1;
     }
 
@@ -405,7 +451,7 @@ int main(int argc, char **argv)
     if (custom_streams == NULL) {
         print_usage(argv[0]);
 
-        free(filtered_events);
+        free_options(options);
         free_custom_streams(custom_streams, kshark_ctx->n_streams);
         return -1;
     }
@@ -416,7 +462,7 @@ int main(int argc, char **argv)
     if (n_guest < 0) {
         printf("Failed mapping: %d\n", n_guest);
 
-        free(filtered_events);
+        free_options(options);
         free_custom_streams(custom_streams, kshark_ctx->n_streams);
         return 1;
     }
@@ -582,8 +628,8 @@ int main(int argc, char **argv)
             	half_event_name = strdup(event_name);
             	strtok(half_event_name, "/");
                 if (custom_stream->cpus[current->cpu]->state->cpu != -1 &&
-                	(not_in(strtok(NULL, "/"), filtered_events, n_filtered_events) &&
-                		not_in(event_name, filtered_events, n_filtered_events))) {
+                    (not_in(strtok(NULL, "/"), options->filtered_events, options->n_filtered_events) &&
+                        not_in(event_name, options->filtered_events, options->n_filtered_events))) {
 
                     n_host_events_inside++;
                 }
@@ -593,6 +639,9 @@ int main(int argc, char **argv)
 
         //print_entry(entries[i]);
     }
+
+    if (options->sp_timer && options->sp_idle)
+        dump_all_samples(hrtimer_events, cpu_idle_events, options->sp_timer, options->sp_idle);
 
     print_stats(hrtimer_events, cpu_idle_events, custom_streams, kshark_ctx->n_streams, host_guest_mapping,
                 n_guest, i, n_host_events_inside, n_guest_events_outside);
@@ -611,7 +660,7 @@ int main(int argc, char **argv)
     free_sample_array(hrtimer_events);
     free_sample_array(cpu_idle_events);
 
-    free_data(kshark_ctx, custom_streams, entries, n_entries, host_guest_mapping, n_guest, filtered_events);
+    free_data(kshark_ctx, custom_streams, entries, n_entries, host_guest_mapping, n_guest, options);
     kshark_free(kshark_ctx);
 }
 
