@@ -11,6 +11,9 @@
 /** KernelShark Version number. */
 #cmakedefine KS_VERSION_STRING "@KS_VERSION_STRING@"
 
+/** KernelShark Application name. */
+#cmakedefine KS_APP_NAME "@KS_APP_NAME@"
+
 /** KernelShark installation prefix path. */
 #cmakedefine _INSTALL_PREFIX "@_INSTALL_PREFIX@"
 
@@ -31,6 +34,7 @@
 
 /** Qt - old version detected. */
 #cmakedefine QT_VERSION_LESS_5_11
+#cmakedefine QT_VERSION_LESS_5_15
 
 /** Location of the KernelShark tests. */
 #cmakedefine KS_TEST_DIR "@KS_TEST_DIR@"

@@ -46,6 +46,11 @@ install(FILES "${KS_DIR}/libkshark.pc"
         DESTINATION ${PKG_CONGIG_DIR}
             COMPONENT                 libkshark-devel)
 
+install(CODE "message(\"-- Executing: ldconfig ${_LIBDIR}\")
+              execute_process(COMMAND bash \"-c\" \"ldconfig ${_INSTALL_PREFIX}\"
+                              ECHO_ERROR_VARIABLE)"
+        COMPONENT libkshark-devel)
+
 if (OPENGL_FOUND)
 
     message(STATUS "libkshark-plot")
@@ -54,13 +59,21 @@ if (OPENGL_FOUND)
                                      KsPlugins.cpp)
 
     target_link_libraries(kshark-plot  kshark
-                                       ${GLUT_LIBRARY}
-                                       ${OPENGL_LIBRARIES})
+                                       GLUT::GLUT
+                                       OpenGL::GLU)
 
     set_target_properties(kshark-plot PROPERTIES  SUFFIX ".so.${KS_VERSION_STRING}")
     install(TARGETS kshark-plot
             LIBRARY DESTINATION    ${_LIBDIR}
                 COMPONENT              kernelshark)
+
+    install(FILES "${KS_DIR}/src/stb_truetype.h"
+                  "${KS_DIR}/src/libkshark-plot.h"
+                  "${KS_DIR}/src/KsPlotTools.hpp"
+                  "${KS_DIR}/src/KsPlugins.hpp"
+                  "${KS_DIR}/src/KsCmakeDef.hpp"
+            DESTINATION ${KS_INCLUDS_DESTINATION}
+                COMPONENT libkshark-devel)
 
 endif (OPENGL_FOUND)
 
@@ -92,6 +105,7 @@ if (Qt5Widgets_FOUND AND Qt5Network_FOUND AND TT_FONT_FILE)
                                                             KsTraceGraph.cpp
                                                             KsTraceViewer.cpp
                                                             KsMainWindow.cpp
+                                                            KsPluginsGUI.cpp
                                                             KsCaptureDialog.cpp
                                                             KsQuickContextMenu.cpp
                                                             KsAdvFilteringDialog.cpp)
@@ -133,6 +147,10 @@ if (Qt5Widgets_FOUND AND Qt5Network_FOUND AND TT_FONT_FILE)
     install(PROGRAMS "${KS_DIR}/bin/kshark-su-record"
             DESTINATION ${_INSTALL_PREFIX}/bin/
                 COMPONENT                 kernelshark)
+
+    install(FILES "${KS_DIR}/src/KsPluginsGUI.hpp"
+            DESTINATION ${KS_INCLUDS_DESTINATION}
+                COMPONENT libkshark-devel)
 
     add_subdirectory(plugins)
     set(PLUGINS ${PLUGINS} PARENT_SCOPE)

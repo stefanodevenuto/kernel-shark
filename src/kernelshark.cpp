@@ -56,6 +56,7 @@ int main(int argc, char **argv)
 	int c;
 
 	QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+	QApplication::setDesktopFileName(KS_APP_NAME);
 	QApplication a(argc, argv);
 
 	KsMainWindow ks;
@@ -87,7 +88,7 @@ int main(int argc, char **argv)
 			break;
 
 		case 'a':
-			appInputFiles << QString(optarg).split(" ", QString::SkipEmptyParts);
+			appInputFiles << QString(optarg).split(" ", KS_SPLIT_SkipEmptyParts);
 			break;
 
 		case 'p':

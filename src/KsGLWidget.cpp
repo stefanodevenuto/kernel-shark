@@ -345,10 +345,18 @@ void KsGLWidget::wheelEvent(QWheelEvent * event)
 		 * Use the position of the mouse as a focus point for the
 		 * zoom.
 		 */
-		zoomFocus = event->pos().x() - _bin0Offset();
+#ifdef QT_VERSION_LESS_5_15
+
+	zoomFocus = event->pos().x() - _bin0Offset();
+
+#else
+
+	zoomFocus = event->position().x() - _bin0Offset();
+
+#endif // QT_VERSION_LESS_5_15
 	}
 
-	if (event->delta() > 0) {
+	if (event->angleDelta().y() > 0) {
 		_model.zoomIn(.05, zoomFocus);
 	} else {
 		_model.zoomOut(.05, zoomFocus);
@@ -411,6 +419,7 @@ void KsGLWidget::keyReleaseEvent(QKeyEvent *event)
 
 void KsGLWidget::_defaultPlots(kshark_context *kshark_ctx)
 {
+	struct kshark_data_stream *stream;
 	QVector<int> streamIds, plotVec;
 	uint64_t tMin, tMax;
 	int nCPUs, nBins;
@@ -424,15 +433,19 @@ void KsGLWidget::_defaultPlots(kshark_context *kshark_ctx)
 	 */
 	streamIds = KsUtils::getStreamIdList(kshark_ctx);
 	for (auto const &sd: streamIds) {
-		nCPUs = kshark_ctx->stream[sd]->n_cpus;
+		stream = kshark_ctx->stream[sd];
+		nCPUs = stream->n_cpus;
 		plotVec.clear();
 
 		/* If the number of CPUs is too big show only the first 16. */
 		if (nCPUs > KS_MAX_START_PLOTS / kshark_ctx->n_streams)
 			nCPUs = KS_MAX_START_PLOTS / kshark_ctx->n_streams;
 
-		for (int i = 0; i < nCPUs; ++i)
-			plotVec.append(i);
+		for (int cpu{0}; cpu < stream->n_cpus && plotVec.count() < nCPUs; ++cpu) {
+			/* Do not add plots for idle CPUs. */
+			if (!kshark_hash_id_find(stream->idle_cpus, cpu))
+				plotVec.append(cpu);
+		}
 
 		_streamPlots[sd]._cpuList = plotVec;
 		_streamPlots[sd]._taskList = {};

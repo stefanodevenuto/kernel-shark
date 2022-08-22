@@ -21,8 +21,7 @@
 #include <string.h>
 
 // trace-cmd
-#include "trace-cmd/trace-cmd.h"
-#include "tracefs/tracefs.h"
+#include <trace-cmd.h>
 
 // KernelShark
 #include "libkshark.h"
@@ -392,7 +391,10 @@ static ssize_t get_records(struct kshark_context *kshark_ctx,
 			rec = tracecmd_read_data(kshark_get_tep_input(stream), cpu);
 		}
 
-		total += count;
+		if (!count)
+			kshark_hash_id_add(stream->idle_cpus, cpu);
+		else
+			total += count;
 	}
 
 	*rec_list = cpu_list;
@@ -791,8 +793,10 @@ static char *tepdata_get_latency(struct kshark_data_stream *stream,
 
 	record = tracecmd_read_at(kshark_get_tep_input(stream), entry->offset, NULL);
 
-	if (!record)
+	if (!record) {
+		pthread_mutex_unlock(&stream->input_mutex);
 		return NULL;
+	}
 
 	trace_seq_reset(&seq);
 	tep_print_event(kshark_get_tep(stream), &seq, record,
@@ -1720,6 +1724,11 @@ char **kshark_tracecmd_local_plugins()
 	return tracefs_tracers(tracefs_tracing_dir());
 }
 
+void kshark_tracecmd_plugin_list_free(char **list)
+{
+	tracefs_list_free(list);
+}
+
 /**
  * @brief Free an array, allocated by kshark_tracecmd_get_hostguest_mapping() API
  *
@@ -1869,9 +1878,14 @@ int kshark_tep_find_top_stream(struct kshark_context *kshark_ctx,
 static bool find_wakeup_event(struct tep_handle *tep, const char *wakeup_name,
 			      struct tep_event **waking_event_ptr)
 {
-	*waking_event_ptr = tep_find_event_by_name(tep, "sched", wakeup_name);
+	struct tep_event *event;
 
-	return (*waking_event_ptr)? true : false;
+	event = tep_find_event_by_name(tep, "sched", wakeup_name);
+
+	if (event)
+		*waking_event_ptr = event;
+
+	return !!event;
 }
 
 /**

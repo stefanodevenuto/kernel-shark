@@ -6,8 +6,8 @@ project(kernel-shark)
 
 set(KS_APP_NAME "kernelshark")
 set(KS_VERSION_MAJOR 2)
-set(KS_VERSION_MINOR 0)
-set(KS_VERSION_PATCH 0)
+set(KS_VERSION_MINOR 1)
+set(KS_VERSION_PATCH 1)
 set(KS_VERSION_STRING ${KS_VERSION_MAJOR}.${KS_VERSION_MINOR}.${KS_VERSION_PATCH})
 message("\n project: Kernel Shark: (version: ${KS_VERSION_STRING})\n")
 
@@ -42,6 +42,8 @@ if (NOT _POLKIT_INSTALL_PREFIX)
 
 endif ()
 
+set(LIBTRACECMD_MIN_VERSION 1.0)
+
 set(CMAKE_MODULE_PATH "${KS_DIR}/build")
 find_package(TraceEvent REQUIRED)
 find_package(TraceFS    REQUIRED)
@@ -57,7 +59,7 @@ find_package(GLUT)
 
 set(KS_FONT FreeSans)
 if (NOT TT_FONT_FILE)
-    execute_process(COMMAND  bash "-c" "fc-list '${KS_FONT}' |grep ${KS_FONT}.ttf | cut -d':' -f 1 -z"
+    execute_process(COMMAND  bash "-c" "fc-list '${KS_FONT}' |grep -E ${KS_FONT}'(\.otf|\.ttf)' | cut -d':' -f 1 -z"
                     OUTPUT_VARIABLE TT_FONT_FILE)
 endif (NOT TT_FONT_FILE)
 
@@ -67,7 +69,7 @@ if (TT_FONT_FILE)
 
 else (TT_FONT_FILE)
 
-  message(WARNING "\nCould not find font ${KS_FONT}!\n")
+  message(WARNING "\nCould not find font ${KS_FONT}! Kernelshark GUI requires font ${KS_FONT}!\n")
 
 endif (TT_FONT_FILE)
 
@@ -80,6 +82,12 @@ if (Qt5Widgets_FOUND)
     if(Qt5Widgets_VERSION VERSION_LESS "5.11")
 
         set(QT_VERSION_LESS_5_11 TRUE)
+
+    endif()
+
+    if(Qt5Widgets_VERSION VERSION_LESS "5.15")
+
+        set(QT_VERSION_LESS_5_15 TRUE)
 
     endif()
 
@@ -132,8 +140,7 @@ else (CMAKE_BUILD_TYPE MATCHES Package)
 endif (CMAKE_BUILD_TYPE MATCHES Package)
 
 include_directories(${KS_DIR}/src/
-                    ${KS_DIR}/build/src/
-                    ${TRACECMD_INCLUDE_DIR})
+                    ${KS_DIR}/build/src/)
 
 message("")
 message(STATUS "C flags      : " ${CMAKE_C_FLAGS})
